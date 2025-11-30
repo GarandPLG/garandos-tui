@@ -17,8 +17,8 @@ fn main() {
         eprintln!();
     }
 
-    let options: Vec<(String, bool)> = nix::collect_nix_options_with_path(&ast.syntax(), "");
-    for (path, value) in options {
-        println!("{} = {};", path, value);
+    let options: Vec<(String, String, bool)> = nix::collect_nix_options(&ast.syntax());
+    for (category, path, value) in options {
+        println!("{}: {} = {};", category, path, value);
     }
 }
