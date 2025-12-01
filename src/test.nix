@@ -6,9 +6,9 @@ _: {
   flatpak = {
     enable = true; # Flatpak: universal packaging system for Linux
     packages = {
-      sober = false; # Roblox client
-      warehouse = true; # Flatpak manager
-      flatseal = true; # Flatpak permissions manager
+      sober.enable = false; # Roblox client
+      warehouse.enable = true; # Flatpak manager
+      flatseal.enable = true; # Flatpak permissions manager
     };
   };
 
