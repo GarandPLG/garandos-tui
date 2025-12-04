@@ -1,46 +1,26 @@
 use rnix::{NodeOrToken, Root, SyntaxKind, SyntaxNode, SyntaxToken, TextRange, TextSize};
 use std::collections::HashMap;
 
-/// Zbiera wszystkie opcje typu `bool` z drzewa składniowego Nix.
-///
-/// Jest to niewielka funkcja‑wrapper, która deleguje właściwe zebranie opcji do
-/// `collect_nix_options_with_path`, przekazując jako początkową ścieżkę i kategorię
-/// pusty ciąg znaków.
-///
-/// # Argumenty
-///
-/// * `node` – węzeł korzenia drzewa składniowego, od którego rozpoczynamy przeszukiwanie.
-///
-/// # Zwraca
-///
-/// `Vec<(String, String, bool)>`, gdzie:
-/// - pierwszy element (`String`) to nazwa kategorii (pobrana z najbliższego
-///   blokowego komentarza `/* … */`);
-/// - drugi element (`String`) to pełna ścieżka do opcji (np. `services.ssh.enable`);
-/// - trzeci element (`bool`) to wartość logiczna tej opcji.
-///
-/// # Przykład
-///
-/// ```
-/// use rnix::{Root, SyntaxNode};
-/// // przykładowe źródło Nix
-/// let src = r#"
-/// /* Services */
-/// services.ssh.enable = true;
-/// services.httpd.enable = false;
-/// "#;
-///
-/// // parsujemy źródło
-/// let ast = Root::parse(src);
-///
-/// // zbieramy wszystkie opcje bool
-/// let options = collect_nix_options(&ast.syntax());
-/// assert_eq!(options.len(), 2);
-/// assert!(options.iter().any(|(_, path, val)| path == "services.ssh.enable" && *val));
-/// assert!(options.iter().any(|(_, path, val)| path == "services.httpd.enable" && !*val));
-/// ```
-pub fn collect_nix_options(node: &SyntaxNode) -> Vec<(String, String, bool)> {
-    collect_nix_options_with_path(node, "", "")
+pub struct ConfigOption {
+    pub category: String,
+    pub path: String,
+    pub value: bool,
+    pub source: ConfigSource,
+}
+
+#[derive(PartialEq)]
+pub enum ConfigSource {
+    System,
+    Home,
+}
+
+impl Clone for ConfigSource {
+    fn clone(&self) -> Self {
+        match self {
+            ConfigSource::System => ConfigSource::System,
+            ConfigSource::Home => ConfigSource::Home,
+        }
+    }
 }
 
 /// Pobiera wartość logiczną opcji Nix wskazanej pełną ścieżką.
@@ -72,11 +52,11 @@ pub fn collect_nix_options(node: &SyntaxNode) -> Vec<(String, String, bool)> {
 /// assert_eq!(missing, None);
 /// ```
 pub fn get_nix_value_by_path(node: &SyntaxNode, query_path: &str) -> Option<bool> {
-    let options: Vec<(String, String, bool)> = collect_nix_options(node);
+    let options: Vec<ConfigOption> = collect_nix_options(node, "", ConfigSource::System);
 
     let map: HashMap<&str, bool> = options
         .iter()
-        .map(|(_, path, val)| (path.as_str(), *val))
+        .map(|option| (option.path.as_str(), option.value))
         .collect();
 
     map.get(query_path).copied()
@@ -199,10 +179,6 @@ pub fn toggle_bool_at_path(node: &SyntaxNode, query_path: &str) -> SyntaxNode {
 /// typu `bool`, uwzględniając aktualną ścieżkę oraz kategorię (pobrane z
 /// najbliższego blokowego komentarza).
 ///
-/// Funkcja jest wewnętrzną implementacją używaną przez `collect_nix_options`.
-/// Nie jest częścią publicznego API, ale jej zachowanie jest opisane poniżej,
-/// aby ułatwić utrzymanie kodu.
-///
 /// # Argumenty
 ///
 /// * `node` – bieżący węzeł drzewa składniowego.
@@ -213,15 +189,35 @@ pub fn toggle_bool_at_path(node: &SyntaxNode, query_path: &str) -> SyntaxNode {
 ///
 /// # Zwraca
 ///
-/// `Vec<(String, String, bool)>` – wektor trójek `(kategoria, pełna_ścieżka,
-/// wartość_bool)`.
-fn collect_nix_options_with_path(
+/// `Vec<ConfigOption>` – wektor opcji z kategorią, pełną ścieżką i wartością bool.
+///
+/// # Przykład
+///
+/// ```
+/// use rnix::{Root, SyntaxNode};
+/// // przykładowe źródło Nix
+/// let src = r#"
+/// /* Services */
+/// services.ssh.enable = true;
+/// services.httpd.enable = false;
+/// "#;
+///
+/// // parsujemy źródło
+/// let ast = Root::parse(src);
+///
+/// // zbieramy wszystkie opcje bool
+/// let options = collect_nix_options(&ast.syntax(), "", ConfigSource::System);
+/// assert_eq!(options.len(), 2);
+/// assert!(options.iter().any(|option| option.path == "services.ssh.enable" && option.value));
+/// assert!(options.iter().any(|option| option.path == "services.httpd.enable" && !option.value));
+/// ```
+pub fn collect_nix_options(
     node: &SyntaxNode,
     current_path: &str,
-    current_category: &str,
-) -> Vec<(String, String, bool)> {
-    let mut result: Vec<(String, String, bool)> = Vec::new();
-    let mut category: String = current_category.to_string();
+    current_source: ConfigSource,
+) -> Vec<ConfigOption> {
+    let mut result: Vec<ConfigOption> = Vec::new();
+    let mut category: String = String::new();
 
     let children: Vec<NodeOrToken<SyntaxNode, SyntaxToken>> = node.children_with_tokens().collect();
 
@@ -263,10 +259,10 @@ fn collect_nix_options_with_path(
                                 } else {
                                     format!("{}.{}", current_path, attr_path)
                                 };
-                                result.extend(collect_nix_options_with_path(
+                                result.extend(collect_nix_options(
                                     &grand_node,
                                     &new_path,
-                                    &category,
+                                    current_source.clone(),
                                 ));
                             }
                             _ => {}
@@ -281,15 +277,20 @@ fn collect_nix_options_with_path(
                         format!("{}.{}", current_path, attr_path)
                     };
                     let bool_value: bool = value_node.text() == "true";
-                    result.push((category.clone(), full_path, bool_value));
+                    result.push(ConfigOption {
+                        category: category.clone(),
+                        path: full_path,
+                        value: bool_value,
+                        source: current_source.clone(),
+                    });
                 }
             }
 
             NodeOrToken::Node(child_node) => {
-                result.extend(collect_nix_options_with_path(
+                result.extend(collect_nix_options(
                     child_node,
                     current_path,
-                    &category,
+                    current_source.clone(),
                 ));
             }
 
