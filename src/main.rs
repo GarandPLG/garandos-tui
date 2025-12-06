@@ -1,7 +1,7 @@
 use garandos_tui::{
     app::{App, Event, handle_input_events},
-    cli::{NixModules, get_modules},
-    nix::ConfigSource,
+    cli::get_modules,
+    nix::{ConfigSource, NixModules},
 };
 use ratatui::{Terminal, prelude::CrosstermBackend};
 use std::{
@@ -15,6 +15,10 @@ fn main() -> Result<()> {
     let mut terminal: Terminal<CrosstermBackend<Stdout>> = ratatui::init();
     let mut app: App = App {
         exit: false,
+        system_path: nix_modules.system_path,
+        home_path: nix_modules.home_path,
+        system_ast: nix_modules.system_ast,
+        home_ast: nix_modules.home_ast,
         system_modules: nix_modules.system_modules,
         home_modules: nix_modules.home_modules,
         current_file: ConfigSource::System,

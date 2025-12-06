@@ -1,6 +1,16 @@
-use rnix::{NodeOrToken, Root, SyntaxKind, SyntaxNode, SyntaxToken, TextRange, TextSize};
-use std::collections::HashMap;
+use rnix::{NodeOrToken, Parse, Root, SyntaxKind, SyntaxNode, SyntaxToken, TextRange, TextSize};
+use std::{collections::HashMap, fs, path::PathBuf};
 
+pub struct NixModules {
+    pub system_path: PathBuf,
+    pub system_ast: Parse<Root>,
+    pub system_modules: Vec<ConfigOption>,
+    pub home_path: PathBuf,
+    pub home_ast: Parse<Root>,
+    pub home_modules: Vec<ConfigOption>,
+}
+
+#[derive(Clone)]
 pub struct ConfigOption {
     pub category: String,
     pub path: String,
@@ -8,18 +18,43 @@ pub struct ConfigOption {
     pub source: ConfigSource,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub enum ConfigSource {
     System,
     Home,
 }
 
-impl Clone for ConfigSource {
-    fn clone(&self) -> Self {
-        match self {
-            ConfigSource::System => ConfigSource::System,
-            ConfigSource::Home => ConfigSource::Home,
+pub fn parse_nix(src: &str) -> Parse<Root> {
+    let ast: Parse<Root> = Root::parse(src);
+    if !ast.errors().is_empty() {
+        eprintln!("Błędy parsowania:");
+        for err in ast.errors() {
+            eprintln!("  - {}", err);
         }
+        panic!("Błąd parsowania pliku .nix");
+    }
+    ast
+}
+
+pub fn build_nix_modules(system_path: PathBuf, home_path: PathBuf) -> NixModules {
+    let system_src: String = fs::read_to_string(&system_path).expect("Failed to read system file");
+    let home_src: String = fs::read_to_string(&home_path).expect("Failed to read home file");
+
+    let system_ast: Parse<Root> = parse_nix(&system_src);
+    let home_ast: Parse<Root> = parse_nix(&home_src);
+
+    let system_modules: Vec<ConfigOption> =
+        collect_nix_options(&system_ast.syntax(), "", ConfigSource::System);
+    let home_modules: Vec<ConfigOption> =
+        collect_nix_options(&home_ast.syntax(), "", ConfigSource::Home);
+
+    NixModules {
+        system_path,
+        system_ast,
+        system_modules,
+        home_path,
+        home_ast,
+        home_modules,
     }
 }
 

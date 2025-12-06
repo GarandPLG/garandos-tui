@@ -1,4 +1,6 @@
-use crate::nix::{ConfigOption, ConfigSource};
+use crate::nix::{
+    ConfigOption, ConfigSource, collect_nix_options, get_nix_value_by_path, toggle_bool_at_path,
+};
 use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
@@ -6,15 +8,22 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::Stylize,
     text::{Line, Span},
-    widgets::Widget,
+    widgets::{Paragraph, Widget},
 };
+use rnix::{Parse, Root, SyntaxNode};
 use std::{
+    fs,
     io::Result,
+    path::PathBuf,
     sync::mpsc::{self, Receiver},
 };
 
 pub struct App {
     pub exit: bool,
+    pub system_path: PathBuf,
+    pub home_path: PathBuf,
+    pub system_ast: Parse<Root>,
+    pub home_ast: Parse<Root>,
     pub system_modules: Vec<ConfigOption>,
     pub home_modules: Vec<ConfigOption>,
     pub current_file: ConfigSource,
@@ -24,7 +33,7 @@ pub struct App {
 
 pub enum Event {
     Input(KeyEvent),
-    EditFile,
+    // EditFile,
 }
 
 impl App {
@@ -37,7 +46,7 @@ impl App {
             match event {
                 Event::Input(key_event) => self.handle_key_event(key_event)?,
                 // Event::EditFile => self.handle_file_edit_events()?,
-                _ => {}
+                // _ => {}
             }
             terminal.draw(|frame: &mut Frame<'_>| self.draw(frame))?;
         }
@@ -54,6 +63,14 @@ impl App {
         if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Char('q') {
             self.exit = true;
         }
+        // 1 - zmień plik na ConfigSource::System (pomiń wykonywaniej, jeżeli już jest wybrany)
+        else if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Char('1') {
+            self.current_file = ConfigSource::System;
+        }
+        // 2 - zmień plik na ConfigSource::Home (pomiń wykonywaniej, jeżeli już jest wybrany)
+        else if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Char('2') {
+            self.current_file = ConfigSource::Home;
+        }
         // ↑ - scroll w górę
         else if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Up {
             self.selected_index = self.selected_index.saturating_sub(1);
@@ -64,21 +81,53 @@ impl App {
         }
         // ENTER - zmień wartość boolen danej opcji
         else if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Enter {
-        }
-        // 1 - zmień plik na ConfigSource::System (pomiń wykonywaniej, jeżeli już jest wybrany)
-        else if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Char('1') {
-            if self.current_file != ConfigSource::System {
-                self.current_file = ConfigSource::System;
-            } else {
-                self.current_file = ConfigSource::Home;
-            }
-        }
-        // 2 - zmień plik na ConfigSource::Home (pomiń wykonywaniej, jeżeli już jest wybrany)
-        else if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Char('2') {
-            if self.current_file != ConfigSource::Home {
-                self.current_file = ConfigSource::Home;
-            } else {
-                self.current_file = ConfigSource::System;
+            let modules: &Vec<ConfigOption> = match self.current_file {
+                ConfigSource::System => &self.system_modules.clone(),
+                ConfigSource::Home => &self.home_modules.clone(),
+            };
+            let node: &SyntaxNode = match self.current_file {
+                ConfigSource::System => &self.system_ast.syntax(),
+                ConfigSource::Home => &self.home_ast.syntax(),
+            };
+            if let Some(module) = modules.get(self.selected_index) {
+                let new_node: SyntaxNode = toggle_bool_at_path(node, module.path.as_str());
+
+                let new_ast: Parse<Root> = Root::parse(&new_node.to_string().as_str());
+
+                let new_modules: Vec<ConfigOption> =
+                    collect_nix_options(&new_node, "", self.current_file.clone());
+
+                let new_module_value: bool =
+                    if let Some(value) = get_nix_value_by_path(&new_node, module.path.as_str()) {
+                        value
+                    } else {
+                        module.value.clone()
+                    };
+
+                self.last_action_status = if let Some(module) = modules.get(self.selected_index) {
+                    match self.current_file {
+                        ConfigSource::System => {
+                            self.system_modules = new_modules;
+                            self.system_ast = new_ast;
+                            fs::write(&self.system_path, new_node.to_string())
+                                .expect("Nie można zapisać pliku modułów systemowych");
+                        }
+                        ConfigSource::Home => {
+                            self.home_modules = new_modules;
+                            self.home_ast = new_ast;
+                            fs::write(&self.home_path, new_node.to_string())
+                                .expect("Nie można zapisać pliku modułów domowych");
+                        }
+                    };
+                    format!(
+                        "{} = {} -> {}",
+                        module.path.clone(),
+                        module.value.clone(),
+                        new_module_value
+                    )
+                } else {
+                    "Nothing changed".to_string()
+                };
             }
         }
 
@@ -92,32 +141,62 @@ impl Widget for &App {
         Self: Sized,
     {
         let vertical_layout: Layout = Layout::vertical([
-            Constraint::Percentage(10),
-            Constraint::Percentage(80),
-            Constraint::Percentage(10),
+            Constraint::Percentage(5),
+            Constraint::Percentage(90),
+            Constraint::Percentage(5),
         ]);
 
         let [title_area, content_area, footer_area] = vertical_layout.areas(area);
 
-        let (system_file, home_file) = match self.current_file {
-            ConfigSource::System => ("(System)".blue().bold(), "Home".reset()),
-            ConfigSource::Home => ("System".reset(), "(Home)".blue().bold()),
-        };
-        let navbar: Line<'_> = Line::from(vec![
-            Span::from("GarandOS TUI".bold().italic().yellow()),
-            Span::from(" * ".reset()),
-            system_file,
-            Span::from(" [1]".reset()),
-            Span::from(" * ".reset()),
-            home_file,
-            Span::from(" [2]".reset()),
-            Span::from(" *".reset()),
-            Span::from(" Quit".reset()),
-            Span::from(" [q]".reset()),
-        ])
-        .left_aligned();
+        {
+            let (system_file, home_file) = match self.current_file {
+                ConfigSource::System => ("(System)".blue().bold(), "Home".reset()),
+                ConfigSource::Home => ("System".reset(), "(Home)".blue().bold()),
+            };
+            let title: Line<'_> = Line::from(vec![
+                Span::from("GarandOS TUI".bold().italic().yellow()),
+                Span::from(" * ".reset()),
+                system_file,
+                Span::from(" [1]".reset()),
+                Span::from(" * ".reset()),
+                home_file,
+                Span::from(" [2]".reset()),
+                Span::from(" *".reset()),
+                Span::from(" Quit".reset()),
+                Span::from(" [q]".reset()),
+            ])
+            .left_aligned();
 
-        navbar.render(title_area, buf);
+            title.render(title_area, buf);
+        }
+
+        {
+            let footer_line1: Line<'_> = Line::from(vec![
+                Span::from("Use "),
+                Span::from("↑/↓".italic().green()),
+                Span::from(" to navigate, "),
+                Span::from("Enter".bold().white()),
+                Span::from(" to toggle, "),
+                Span::from("1/2".bold().blue()),
+                Span::from(" to switch file, "),
+                Span::from("q".bold().red()),
+                Span::from(" to quit."),
+            ]);
+            let last_action: Span<'_> = if self.last_action_status.is_empty() {
+                Span::from("Nothing changed")
+            } else {
+                self.last_action_status.clone().into()
+            };
+            let footer_line2: Line<'_> = Line::from(vec![
+                Span::from("Last action: "),
+                last_action.italic().green(),
+                Span::from("."),
+            ]);
+            let footer: Paragraph<'_> =
+                Paragraph::new(vec![footer_line1, footer_line2]).left_aligned();
+
+            footer.render(footer_area, buf);
+        }
     }
 }
 
