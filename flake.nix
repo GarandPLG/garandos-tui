@@ -1,5 +1,5 @@
 {
-  description = "TUI for managing GarandsOS' hosts configuration";
+  description = "TUI for managing GarandsOS' hosts enabled modules";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -23,11 +23,7 @@
     nixpkgs,
     naersk,
     fenix,
-    lib,
-    cfg,
   }: let
-    inherit (lib) mkOption mkIf types;
-
     system = "x86_64-linux";
     pkgs = nixpkgs.legacyPackages.${system};
 
@@ -49,6 +45,13 @@
     };
 
     nixosModules.garandos-tui = {
+      config,
+      lib,
+      ...
+    }: let
+      inherit (lib) mkOption mkIf types;
+      cfg = config.programs.garandos-tui;
+    in {
       options.programs.garandos-tui = {
         enable = mkOption {
           type = types.bool;
