@@ -43,10 +43,14 @@ pub fn build_nix_modules(system_path: PathBuf, home_path: PathBuf) -> NixModules
     let system_ast: Parse<Root> = parse_nix(&system_src);
     let home_ast: Parse<Root> = parse_nix(&home_src);
 
-    let system_modules: Vec<ConfigOption> =
-        collect_nix_options(&system_ast.syntax(), "", ConfigSource::System);
+    let system_modules: Vec<ConfigOption> = collect_nix_options(
+        &system_ast.syntax(),
+        "",
+        "".to_string(),
+        ConfigSource::System,
+    );
     let home_modules: Vec<ConfigOption> =
-        collect_nix_options(&home_ast.syntax(), "", ConfigSource::Home);
+        collect_nix_options(&home_ast.syntax(), "", "".to_string(), ConfigSource::Home);
 
     NixModules {
         system_path,
@@ -58,36 +62,9 @@ pub fn build_nix_modules(system_path: PathBuf, home_path: PathBuf) -> NixModules
     }
 }
 
-/// Pobiera wartość logiczną opcji Nix wskazanej pełną ścieżką.
-///
-/// # Argumenty
-///
-/// * `node` – korzeń drzewa składniowego Nix (`SyntaxNode`), uzyskany np.
-///   z `Root::parse(src).syntax()`.
-/// * `query_path` – pełna ścieżka do opcji, np. `services.ssh.enable`.
-///
-/// # Zwraca
-///
-/// `Some(true)` lub `Some(false)` jeśli opcja istnieje, w przeciwnym razie `None`.
-///
-/// # Przykład
-///
-/// ```
-/// use rnix::{Root, SyntaxNode};
-/// let src = r#"services.ssh.enable = true;"#;
-/// let parse = Root::parse(src);
-/// let root: SyntaxNode = parse.node();
-///
-/// // zwraca Some(true)
-/// let val = get_nix_value_by_path(&root, "services.ssh.enable");
-/// assert_eq!(val, Some(true));
-///
-/// // nieistniejąca opcja → None
-/// let missing = get_nix_value_by_path(&root, "services.httpd.enable");
-/// assert_eq!(missing, None);
-/// ```
 pub fn get_nix_value_by_path(node: &SyntaxNode, query_path: &str) -> Option<bool> {
-    let options: Vec<ConfigOption> = collect_nix_options(node, "", ConfigSource::System);
+    let options: Vec<ConfigOption> =
+        collect_nix_options(node, "", "".to_string(), ConfigSource::System);
 
     let map: HashMap<&str, bool> = options
         .iter()
@@ -97,36 +74,6 @@ pub fn get_nix_value_by_path(node: &SyntaxNode, query_path: &str) -> Option<bool
     map.get(query_path).copied()
 }
 
-/// Przełącza (toggle) wartość logiczną opcji w drzewie Nix określonej przez `query_path`.
-///
-/// Funkcja odczytuje tekst źródłowy z podanego węzła, znajduje zakres tekstowy
-/// odpowiadający wartości boolean i zamienia ją na przeciwną (`true` ↔ `false`).
-/// Zwraca nowy węzeł składniowy (`SyntaxNode`) reprezentujący zmodyfikowany
-/// kod Nix. Jeśli podana ścieżka nie zostanie znaleziona, zwracany jest węzeł
-/// niezmieniony.
-///
-/// # Argumenty
-///
-/// * `node` – korzeń drzewa składniowego Nix.
-/// * `query_path` – pełna ścieżka do opcji, której wartość ma zostać przełączona.
-///
-/// # Zwraca
-///
-/// `SyntaxNode` będący korzeniem drzewa składniowego po zastosowaniu zmiany.
-///
-/// # Przykład
-///
-/// ```
-/// use rnix::{Root, SyntaxNode};
-/// let src = r#"services.ssh.enable = true;"#;
-/// let parse = Root::parse(src);
-/// let root: SyntaxNode = parse.syntax();
-///
-/// // przełączamy wartość
-/// let new_root = toggle_bool_at_path(&root, "services.ssh.enable");
-/// let new_src = new_root.text();
-/// assert!(new_src.contains("services.ssh.enable = false"));
-/// ```
 pub fn toggle_bool_at_path(node: &SyntaxNode, query_path: &str) -> SyntaxNode {
     let src: String = node.text().to_string();
 
@@ -210,49 +157,13 @@ pub fn toggle_bool_at_path(node: &SyntaxNode, query_path: &str) -> SyntaxNode {
     }
 }
 
-/// Rekurencyjnie przegląda drzewo składniowe Nix i zbiera wszystkie opcje
-/// typu `bool`, uwzględniając aktualną ścieżkę oraz kategorię (pobrane z
-/// najbliższego blokowego komentarza).
-///
-/// # Argumenty
-///
-/// * `node` – bieżący węzeł drzewa składniowego.
-/// * `current_path` – dotychczasowa ścieżka do bieżącego węzła (pusty ciąg dla
-///   węzła korzenia).
-/// * `current_category` – nazwa kategorii pochodząca z najbliższego komentarza
-///   blokowego nad węzłem.
-///
-/// # Zwraca
-///
-/// `Vec<ConfigOption>` – wektor opcji z kategorią, pełną ścieżką i wartością bool.
-///
-/// # Przykład
-///
-/// ```
-/// use rnix::{Root, SyntaxNode};
-/// // przykładowe źródło Nix
-/// let src = r#"
-/// /* Services */
-/// services.ssh.enable = true;
-/// services.httpd.enable = false;
-/// "#;
-///
-/// // parsujemy źródło
-/// let ast = Root::parse(src);
-///
-/// // zbieramy wszystkie opcje bool
-/// let options = collect_nix_options(&ast.syntax(), "", ConfigSource::System);
-/// assert_eq!(options.len(), 2);
-/// assert!(options.iter().any(|option| option.path == "services.ssh.enable" && option.value));
-/// assert!(options.iter().any(|option| option.path == "services.httpd.enable" && !option.value));
-/// ```
 pub fn collect_nix_options(
     node: &SyntaxNode,
     current_path: &str,
+    mut current_category: String,
     current_source: ConfigSource,
 ) -> Vec<ConfigOption> {
     let mut result: Vec<ConfigOption> = Vec::new();
-    let mut category: String = String::new();
 
     let children: Vec<NodeOrToken<SyntaxNode, SyntaxToken>> = node.children_with_tokens().collect();
 
@@ -266,7 +177,7 @@ pub fn collect_nix_options(
                         .trim_end_matches("*/")
                         .trim()
                         .to_string();
-                    category = content;
+                    current_category = content;
                 }
             }
 
@@ -297,6 +208,7 @@ pub fn collect_nix_options(
                                 result.extend(collect_nix_options(
                                     &grand_node,
                                     &new_path,
+                                    current_category.clone(),
                                     current_source.clone(),
                                 ));
                             }
@@ -313,7 +225,7 @@ pub fn collect_nix_options(
                     };
                     let bool_value: bool = value_node.text() == "true";
                     result.push(ConfigOption {
-                        category: category.clone(),
+                        category: current_category.clone(),
                         path: full_path,
                         value: bool_value,
                         source: current_source.clone(),
@@ -325,6 +237,7 @@ pub fn collect_nix_options(
                 result.extend(collect_nix_options(
                     child_node,
                     current_path,
+                    current_category.clone(),
                     current_source.clone(),
                 ));
             }

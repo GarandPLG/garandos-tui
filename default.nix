@@ -1,5 +1,4 @@
 {
-  lib,
   rustPlatform,
   pkg-config,
 }:
@@ -8,5 +7,5 @@ rustPlatform.buildRustPackage {
   src = ./.;
   # buildInputs = [ ];
   nativeBuildInputs = [pkg-config];
-  cargoHash = lib.fakeHash;
+  cargoHash = "sha256-cFAkKwgLzj6Hr2pq7W/1Ps1G3yKzgEam/qV6p31gadA=";
 }

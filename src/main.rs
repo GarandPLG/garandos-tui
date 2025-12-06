@@ -12,6 +12,11 @@ use std::{
 
 fn main() -> Result<()> {
     let nix_modules: NixModules = get_modules();
+
+    for module in &nix_modules.system_modules {
+        println!("{} - ({})", module.category, module.path);
+    }
+
     let mut terminal: Terminal<CrosstermBackend<Stdout>> = ratatui::init();
     let mut app: App = App {
         exit: false,

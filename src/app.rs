@@ -6,9 +6,9 @@ use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
-    style::Stylize,
+    style::{Color, Stylize},
     text::{Line, Span},
-    widgets::{Paragraph, Widget},
+    widgets::{Block, Borders, Paragraph, Widget},
 };
 use rnix::{Parse, Root, SyntaxNode};
 use std::{
@@ -60,13 +60,19 @@ impl App {
         if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Char('q') {
             self.exit = true;
         }
-        // 1 - zmień plik na ConfigSource::System (pomiń wykonywaniej, jeżeli już jest wybrany)
-        else if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Char('1') {
+        // 1/← - zmień plik na ConfigSource::System (pomiń wykonywaniej, jeżeli już jest wybrany)
+        else if key_event.kind == KeyEventKind::Press
+            && (key_event.code == KeyCode::Char('1') || key_event.code == KeyCode::Left)
+        {
             self.current_file = ConfigSource::System;
+            self.selected_index = 0_usize;
         }
-        // 2 - zmień plik na ConfigSource::Home (pomiń wykonywaniej, jeżeli już jest wybrany)
-        else if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Char('2') {
+        // 2/→ - zmień plik na ConfigSource::Home (pomiń wykonywaniej, jeżeli już jest wybrany)
+        else if key_event.kind == KeyEventKind::Press
+            && (key_event.code == KeyCode::Char('2') || key_event.code == KeyCode::Right)
+        {
             self.current_file = ConfigSource::Home;
+            self.selected_index = 0_usize;
         }
         // ↑ - scroll w górę
         else if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Up {
@@ -74,10 +80,16 @@ impl App {
         }
         // ↓ - scroll w dół
         else if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Down {
-            self.selected_index = self.selected_index.saturating_add(1);
+            let max_index = match self.current_file {
+                ConfigSource::System => self.system_modules.len() - 1,
+                ConfigSource::Home => self.home_modules.len() - 1,
+            };
+            self.selected_index = self.selected_index.saturating_add(1).min(max_index);
         }
-        // ENTER - zmień wartość boolen danej opcji
-        else if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Enter {
+        // ENTER/SPACE - zmień wartość boolen danej opcji
+        else if key_event.kind == KeyEventKind::Press
+            && (key_event.code == KeyCode::Enter || key_event.code == KeyCode::Char(' '))
+        {
             let (modules, new_node, new_ast, new_modules, new_module_value) =
                 self.get_selected_option_context();
 
@@ -141,7 +153,7 @@ impl App {
                 let new_ast: Parse<Root> = Root::parse(&new_node.to_string().as_str());
 
                 let new_modules: Vec<ConfigOption> =
-                    collect_nix_options(&new_node, "", self.current_file.clone());
+                    collect_nix_options(&new_node, "", "".to_string(), self.current_file.clone());
 
                 let new_module_value: bool = get_nix_value_by_path(&new_node, module.path.as_str())
                     .unwrap_or_else(|| module.value.clone());
@@ -172,33 +184,67 @@ impl Widget for &App {
         Self: Sized,
     {
         let vertical_layout: Layout = Layout::vertical([
-            Constraint::Percentage(5),
-            Constraint::Percentage(90),
+            Constraint::Percentage(4),
+            Constraint::Percentage(91),
             Constraint::Percentage(5),
         ]);
 
         let [title_area, content_area, footer_area] = vertical_layout.areas(area);
 
         {
-            let (system_file, home_file) = match self.current_file {
-                ConfigSource::System => ("(System)".blue().bold(), "Home".reset()),
-                ConfigSource::Home => ("System".reset(), "(Home)".blue().bold()),
-            };
-            let title: Line<'_> = Line::from(vec![
-                Span::from("GarandOS TUI".bold().italic().yellow()),
-                Span::from(" * ".reset()),
-                system_file,
-                Span::from(" [1]".reset()),
-                Span::from(" * ".reset()),
-                home_file,
-                Span::from(" [2]".reset()),
-                Span::from(" *".reset()),
-                Span::from(" Quit".reset()),
-                Span::from(" [q]".reset()),
-            ])
-            .left_aligned();
+            let title: Line<'_> =
+                Line::from("GarandOS TUI".bold().italic().yellow()).left_aligned();
 
             title.render(title_area, buf);
+        }
+
+        {
+            let modules: &Vec<ConfigOption> = match self.current_file {
+                ConfigSource::System => &self.system_modules,
+                ConfigSource::Home => &self.home_modules,
+            };
+
+            let mut lines: Vec<Line> = Vec::new();
+            let mut last_category: String = String::new();
+
+            for (idx, module) in modules.iter().enumerate() {
+                if module.category != last_category {
+                    lines.push("".into());
+                    let cat_line = Line::from(vec![
+                        Span::raw(format!("/* {} */", module.category))
+                            .dark_gray()
+                            .italic(),
+                    ]);
+                    lines.push(cat_line);
+                    last_category = module.category.clone();
+                }
+
+                let checkbox: &'static str = if module.value { "☑" } else { "☐" };
+
+                let mut line: Line<'_> =
+                    Line::from(vec![Span::raw(format!("{} {}", checkbox, module.path))]);
+
+                if idx == self.selected_index {
+                    line = line.style(Color::Yellow)
+                }
+
+                lines.push(line);
+            }
+
+            let block_title: &'static str = match self.current_file {
+                ConfigSource::System => "[ System Configuration ]",
+                ConfigSource::Home => "[ Home Configuration ]",
+            };
+
+            let content: Paragraph<'_> = Paragraph::new(lines)
+                .left_aligned()
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(block_title.blue().bold()),
+                )
+                .scroll((self.selected_index as u16, 0));
+            content.render(content_area, buf);
         }
 
         {
@@ -206,9 +252,9 @@ impl Widget for &App {
                 Span::from("Use "),
                 Span::from("↑/↓".italic().green()),
                 Span::from(" to navigate, "),
-                Span::from("Enter".bold().white()),
+                Span::from("Enter/Space".bold().white()),
                 Span::from(" to toggle, "),
-                Span::from("1/2".bold().blue()),
+                Span::from("1/2 or ←/→".bold().blue()),
                 Span::from(" to switch file, "),
                 Span::from("q".bold().red()),
                 Span::from(" to quit."),
