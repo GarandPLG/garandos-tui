@@ -1,5 +1,5 @@
 {
-  description = "TUI for managing GarandsOS' hosts configuration";
+  description = "TUI for managing GarandsOS' hosts enabled modules";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -32,10 +32,6 @@
       cargo = rustToolchain;
       rustc = rustToolchain;
     };
-
-    cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
-    packageVersion = cargoToml.package.version;
-    # ...
   in {
     packages.${system} = {
       default =
@@ -44,8 +40,53 @@
       develop = naerskLib.buildPackage {
         name = "garandos-tui";
         src = ./.;
-        # buildInputs = with pkgs; [];
         nativeBuildInputs = with pkgs; [pkg-config];
+      };
+    };
+
+    nixosModules.garandos-tui = {
+      config,
+      lib,
+      ...
+    }: let
+      inherit (lib) mkOption mkIf types;
+      cfg = config.programs.garandos-tui;
+    in {
+      options.programs.garandos-tui = {
+        enable = mkOption {
+          type = types.bool;
+          default = false;
+          description = "Enable the Garandos TUI module";
+        };
+        package = mkOption {
+          type = types.package;
+          default = self.packages.${system}.default;
+          defaultText = "self.packages.${system}.default";
+          description = "The Garandos TUI package";
+        };
+        systemModulesFilePath = mkOption {
+          type = types.path;
+          default = "";
+          example = "/home/\${username}/garandos/hosts/\${hostname}/system-modules.nix";
+          description = "The path to the Host's system modules file";
+        };
+        homeModulesFilePath = mkOption {
+          type = types.path;
+          default = "";
+          example = "/home/\${username}/garandos/hosts/\${hostname}/home-modules.nix";
+          description = "The path to the Host's home modules file";
+        };
+      };
+      config = mkIf (cfg.enable && cfg.systemModulesFilePath != "" && cfg.homeModulesFilePath != "") {
+        environment.systemPackages = [
+          (pkgs.writeScriptBin "garandos-tui" ''
+            #!${pkgs.runtimeShell}
+            exec ${cfg.package}/bin/garandos_tui \
+              --sf '${cfg.systemModulesFilePath}' \
+              --hf '${cfg.homeModulesFilePath}' \
+              "$@"
+          '')
+        ];
       };
     };
 
@@ -57,8 +98,6 @@
       nativeBuildInputs = with pkgs; [pkg-config];
 
       shellHook = ''
-        echo "garandos-tui    v${packageVersion}"
-        echo ""
         echo "Commands:"
         echo "    nix build            - Build production version"
         echo "    nix run              - Run production version"
