@@ -38,6 +38,8 @@ pub enum Event {
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal, rx: Receiver<Event>) -> Result<()> {
         while !self.exit {
+            terminal.draw(|frame: &mut Frame<'_>| self.draw(frame))?;
+
             let event: Event = match rx.recv() {
                 Ok(ev) => ev,
                 Err(_) => break,
@@ -45,7 +47,6 @@ impl App {
             match event {
                 Event::Input(key_event) => self.handle_key_event(key_event)?,
             }
-            terminal.draw(|frame: &mut Frame<'_>| self.draw(frame))?;
         }
 
         Ok(())
@@ -252,7 +253,7 @@ impl Widget for &App {
                 Span::from("Use "),
                 Span::from("↑/↓".italic().green()),
                 Span::from(" to navigate, "),
-                Span::from("Enter/Space".bold().white()),
+                Span::from("Enter/Space".bold().yellow()),
                 Span::from(" to toggle, "),
                 Span::from("1/2 or ←/→".bold().blue()),
                 Span::from(" to switch file, "),
