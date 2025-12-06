@@ -33,7 +33,6 @@ pub struct App {
 
 pub enum Event {
     Input(KeyEvent),
-    // EditFile,
 }
 
 impl App {
@@ -45,8 +44,6 @@ impl App {
             };
             match event {
                 Event::Input(key_event) => self.handle_key_event(key_event)?,
-                // Event::EditFile => self.handle_file_edit_events()?,
-                // _ => {}
             }
             terminal.draw(|frame: &mut Frame<'_>| self.draw(frame))?;
         }
@@ -81,15 +78,64 @@ impl App {
         }
         // ENTER - zmień wartość boolen danej opcji
         else if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Enter {
-            let modules: &Vec<ConfigOption> = match self.current_file {
-                ConfigSource::System => &self.system_modules.clone(),
-                ConfigSource::Home => &self.home_modules.clone(),
+            let (modules, new_node, new_ast, new_modules, new_module_value) =
+                self.get_selected_option_context();
+
+            self.last_action_status = if let Some(module) = modules.get(self.selected_index) {
+                match self.current_file {
+                    ConfigSource::System => {
+                        self.system_modules = new_modules;
+                        self.system_ast = new_ast;
+                        fs::write(&self.system_path, new_node.to_string())
+                            .expect("Nie można zapisać pliku modułów systemowych");
+                    }
+                    ConfigSource::Home => {
+                        self.home_modules = new_modules;
+                        self.home_ast = new_ast;
+                        fs::write(&self.home_path, new_node.to_string())
+                            .expect("Nie można zapisać pliku modułów domowych");
+                    }
+                };
+                format!(
+                    "{} = {} -> {}",
+                    module.path.clone(),
+                    module.value.clone(),
+                    new_module_value
+                )
+            } else {
+                "Nothing changed".to_string()
             };
-            let node: &SyntaxNode = match self.current_file {
-                ConfigSource::System => &self.system_ast.syntax(),
-                ConfigSource::Home => &self.home_ast.syntax(),
-            };
-            if let Some(module) = modules.get(self.selected_index) {
+        }
+
+        Ok(())
+    }
+
+    fn get_selected_option_context(
+        &self,
+    ) -> (
+        Vec<ConfigOption>,
+        SyntaxNode,
+        Parse<Root>,
+        Vec<ConfigOption>,
+        bool,
+    ) {
+        let modules: &Vec<ConfigOption> = match self.current_file {
+            ConfigSource::System => &self.system_modules,
+            ConfigSource::Home => &self.home_modules,
+        };
+        let node: &SyntaxNode = match self.current_file {
+            ConfigSource::System => &self.system_ast.syntax(),
+            ConfigSource::Home => &self.home_ast.syntax(),
+        };
+        let fallback_module_value: bool = modules
+            .get(self.selected_index)
+            .map(|m| m.value.clone())
+            .unwrap_or(false);
+
+        let (new_node, new_ast, new_modules, new_module_value) = match modules
+            .get(self.selected_index)
+        {
+            Some(module) => {
                 let new_node: SyntaxNode = toggle_bool_at_path(node, module.path.as_str());
 
                 let new_ast: Parse<Root> = Root::parse(&new_node.to_string().as_str());
@@ -97,41 +143,26 @@ impl App {
                 let new_modules: Vec<ConfigOption> =
                     collect_nix_options(&new_node, "", self.current_file.clone());
 
-                let new_module_value: bool =
-                    if let Some(value) = get_nix_value_by_path(&new_node, module.path.as_str()) {
-                        value
-                    } else {
-                        module.value.clone()
-                    };
+                let new_module_value: bool = get_nix_value_by_path(&new_node, module.path.as_str())
+                    .unwrap_or_else(|| module.value.clone());
 
-                self.last_action_status = if let Some(module) = modules.get(self.selected_index) {
-                    match self.current_file {
-                        ConfigSource::System => {
-                            self.system_modules = new_modules;
-                            self.system_ast = new_ast;
-                            fs::write(&self.system_path, new_node.to_string())
-                                .expect("Nie można zapisać pliku modułów systemowych");
-                        }
-                        ConfigSource::Home => {
-                            self.home_modules = new_modules;
-                            self.home_ast = new_ast;
-                            fs::write(&self.home_path, new_node.to_string())
-                                .expect("Nie można zapisać pliku modułów domowych");
-                        }
-                    };
-                    format!(
-                        "{} = {} -> {}",
-                        module.path.clone(),
-                        module.value.clone(),
-                        new_module_value
-                    )
-                } else {
-                    "Nothing changed".to_string()
-                };
+                (new_node, new_ast, new_modules, new_module_value)
             }
-        }
+            None => (
+                node.clone(),
+                Root::parse(&node.to_string().as_str()),
+                Vec::new(),
+                fallback_module_value,
+            ),
+        };
 
-        Ok(())
+        (
+            modules.to_vec(),
+            new_node,
+            new_ast,
+            new_modules,
+            new_module_value,
+        )
     }
 }
 
